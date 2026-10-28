@@ -1,0 +1,79 @@
+# Reusable check: fails if any tracked file, file path, commit message on the
+# branch, or the pull request title or body contains a term from the
+# PRIVATE_TERMS secret (comma- or newline-separated). Matching (case-insensitive,
+# whole words, whitespace collapsed) is done by scripts/has-private-term from
+# this repository, at this workflow's own commit. Never prints the matching term.
+# Without the secret (pull requests from forks), it skips with a notice.
+name: private-terms
+
+on:
+  workflow_call:
+    secrets:
+      PRIVATE_TERMS:
+        required: false
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Skip without the secret
+        id: secret
+        env:
+          PRIVATE_TERMS: ${{ secrets.PRIVATE_TERMS }}
+        run: |
+          if [ -z "${PRIVATE_TERMS:-}" ]; then
+            echo "::notice::PRIVATE_TERMS was not passed in; skipping the private-terms check."
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.secret.outputs.present == 'true'
+        with:
+          fetch-depth: 0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.secret.outputs.present == 'true'
+        with:
+          repository: ${{ job.workflow_repository }}
+          ref: ${{ job.workflow_sha }}
+          path: .private-terms-workflow
+          sparse-checkout: scripts
+      - name: Check for private terms
+        if: steps.secret.outputs.present == 'true'
+        env:
+          PRIVATE_TERMS: ${{ secrets.PRIVATE_TERMS }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -u
+          has_term=.private-terms-workflow/scripts/has-private-term
+          found=0
+
+          while IFS= read -r -d '' f; do
+            if printf '%s\n' "$f" | "$has_term"; then
+              echo "::error::Private term found in a file path."
+              found=1
+            elif [ -f "$f" ] && "$has_term" < "$f"; then
+              echo "::error::Private term found in $f"
+              found=1
+            fi
+          done < <(git ls-files -z)
+
+          for c in $(git rev-list "origin/${DEFAULT_BRANCH}..HEAD" 2>/dev/null); do
+            if git log -1 --format=%B "$c" | "$has_term"; then
+              echo "::error::Private term found in the message of commit $(git rev-parse --short "$c")."
+              found=1
+            fi
+          done
+
+          if printf '%s\n' "${PR_TITLE:-}" | "$has_term" || printf '%s\n' "${PR_BODY:-}" | "$has_term"; then
+            echo "::error::Private term found in the pull request title or body."
+            found=1
+          fi
+
+          exit "$found"

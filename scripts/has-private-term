@@ -1,0 +1,48 @@
+#!/usr/bin/env bash
+# Exits 0 if stdin contains a term from PRIVATE_TERMS (comma- or newline-separated), 1 if not.
+# Used by the private-terms workflow and by pre-push hooks. Never prints the term.
+#
+# Matching is case-insensitive and whole-word. All whitespace in the input, line breaks
+# included, is collapsed to single spaces first, so a multi-word term still matches when its
+# words are split by extra spaces, a tab, a line break or a Unicode space (see below). Binary files and files with
+# invalid UTF-8 are checked too.
+#
+# Fails closed: missing terms or a grep error exit 0 (treated as a match) with a message.
+
+set -u
+
+if ! command -v iconv >/dev/null; then
+	echo "has-private-term: iconv not found; failing closed." >&2
+	exit 0
+fi
+
+if [ -z "${PRIVATE_TERMS:-}" ]; then
+	echo "has-private-term: PRIVATE_TERMS is empty; failing closed." >&2
+	exit 0
+fi
+
+terms=$(printf '%s\n' "$PRIVATE_TERMS" | tr ',' '\n' | tr -s ' \t\r' ' ' \
+	| sed -e 's/^ //' -e 's/ $//' | grep -v '^$')
+if [ -z "$terms" ]; then
+	echo "has-private-term: PRIVATE_TERMS has no terms; failing closed." >&2
+	exit 0
+fi
+
+# Unicode spaces count as whitespace: U+00A0 (no-break), U+202F (narrow no-break),
+# U+2007 (figure) and U+2009 (thin) become plain spaces first.
+# A stray invalid byte must not hide a term, so:
+# - sed and tr run byte-wise (LC_ALL=C); in a UTF-8 locale macOS tr stops at the first invalid byte.
+#   UTF-8 multibyte characters never contain ASCII whitespace bytes, so this is safe for text.
+# - iconv -c drops invalid sequences; BSD grep won't match past one in a UTF-8 locale.
+# - grep -a treats binary input as text. grep keeps the locale, so accented terms case-fold.
+LC_ALL=C sed -e $'s/\xc2\xa0/ /g' -e $'s/\xe2\x80[\xaf\x87\x89]/ /g' \
+	| LC_ALL=C tr -s '[:space:]' ' ' | iconv -c -f UTF-8 -t UTF-8 2>/dev/null \
+	| grep -qaiwF -f <(printf '%s\n' "$terms")
+case $? in
+	0) exit 0 ;;
+	1) exit 1 ;;
+	*)
+		echo "has-private-term: grep failed; failing closed." >&2
+		exit 0
+		;;
+esac

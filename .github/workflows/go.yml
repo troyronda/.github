@@ -1,0 +1,82 @@
+# Reusable CI for a Go module: formatting, tidy go.mod, vet, staticcheck,
+# govulncheck, race tests, and gitleaks over the full history.
+name: go
+
+on:
+  workflow_call:
+    inputs:
+      govulncheck-ignore:
+        description: >-
+          Path, in the caller's repository, of a file listing advisory IDs
+          (GO-YYYY-NNNN, one per line, then a reason) that govulncheck may
+          report without failing. Empty: none may be reported.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
+      - name: govulncheck
+        env:
+          IGNORE_FILE: ${{ inputs.govulncheck-ignore }}
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format json ./... > "$RUNNER_TEMP/vuln.json"
+          found=$(jq -r 'select(.finding.trace[0].function? != null) | .finding.osv' "$RUNNER_TEMP/vuln.json" | sort -u)
+          ignored=""
+          if [ -n "$IGNORE_FILE" ]; then
+            ignored=$(grep -oE '^GO-[0-9]{4}-[0-9]+' "$IGNORE_FILE" | sort -u)
+          fi
+          remaining=$(comm -23 <(printf '%s\n' "$found" | sed '/^$/d') <(printf '%s\n' "$ignored" | sed '/^$/d'))
+          if [ -n "$remaining" ]; then
+            echo "::error::Reachable vulnerabilities: $(echo $remaining)"
+            go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./... || true
+            exit 1
+          fi
+          echo "No reachable vulnerabilities${IGNORE_FILE:+ outside $IGNORE_FILE}."
+      - name: go test
+        run: go test -race ./...
+
+  gitleaks:
+    name: gitleaks
+    runs-on: ubuntu-latest
+    env:
+      GITLEAKS_VERSION: 8.30.1
+      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb # linux_x64
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: install gitleaks
+        run: |
+          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl -fsSLo "$RUNNER_TEMP/$tarball" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
+          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
+          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
+      - name: gitleaks
+        # Redacted and not verbose, so no secret is printed in the log.
+        run: '"$RUNNER_TEMP/gitleaks" git --no-banner --redact .'

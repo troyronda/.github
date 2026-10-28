@@ -1,0 +1,7 @@
+# job.workflow_repository and job.workflow_sha are documented GitHub contexts
+# (docs.github.com/en/actions/reference/workflows-and-actions/contexts#job-context)
+# that actionlint v1.7.12 doesn't know yet. Remove this once it does.
+paths:
+  .github/workflows/private-terms.yml:
+    ignore:
+      - 'property "workflow_(repository|sha)" is not defined'
