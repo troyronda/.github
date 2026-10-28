@@ -53,7 +53,7 @@ jobs:
           fi
           remaining=$(comm -23 <(printf '%s\n' "$found" | sed '/^$/d') <(printf '%s\n' "$ignored" | sed '/^$/d'))
           if [ -n "$remaining" ]; then
-            echo "::error::Reachable vulnerabilities: $(echo $remaining)"
+            echo "::error::Reachable vulnerabilities: ${remaining//$'\n'/ }"
             go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./... || true
             exit 1
           fi
