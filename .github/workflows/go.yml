@@ -1,0 +1,63 @@
+# Reusable CI for a Go module: formatting, tidy go.mod, vet, staticcheck,
+# govulncheck and race tests.
+name: go
+
+on:
+  workflow_call:
+    inputs:
+      govulncheck-ignore:
+        description: >-
+          Path, in the caller's repository, of a file listing advisory IDs
+          (GO-YYYY-NNNN, one per line, then a reason) that govulncheck may
+          report without failing. Empty: none may be reported.
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  go:
+    name: go
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::Not gofmt-formatted:"
+            echo "$unformatted"
+            exit 1
+          fi
+      - name: go mod tidy
+        run: |
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+      - name: go vet
+        run: go vet ./...
+      - name: staticcheck
+        run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
+      - name: govulncheck
+        env:
+          IGNORE_FILE: ${{ inputs.govulncheck-ignore }}
+        run: |
+          go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format json ./... > "$RUNNER_TEMP/vuln.json"
+          found=$(jq -r 'select(.finding.trace[0].function? != null) | .finding.osv' "$RUNNER_TEMP/vuln.json" | sort -u)
+          ignored=""
+          if [ -n "$IGNORE_FILE" ]; then
+            ignored=$(grep -oE '^GO-[0-9]{4}-[0-9]+' "$IGNORE_FILE" | sort -u)
+          fi
+          remaining=$(comm -23 <(printf '%s\n' "$found" | sed '/^$/d') <(printf '%s\n' "$ignored" | sed '/^$/d'))
+          if [ -n "$remaining" ]; then
+            echo "::error::Reachable vulnerabilities: ${remaining//$'\n'/ }"
+            go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./... || true
+            exit 1
+          fi
+          echo "No reachable vulnerabilities${IGNORE_FILE:+ outside $IGNORE_FILE}."
+      - name: go test
+        run: go test -race ./...
+
