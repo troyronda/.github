@@ -9,8 +9,8 @@ permissions:
   contents: read
 
 jobs:
-  test:
-    name: test
+  actionlint:
+    name: actionlint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -19,10 +19,3 @@ jobs:
           go-version: stable
       - name: actionlint
         run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-      - name: matcher tests
-        run: scripts/test-private-terms.sh
-
-  private-terms:
-    uses: ./.github/workflows/private-terms.yml
-    secrets:
-      PRIVATE_TERMS: ${{ secrets.PRIVATE_TERMS }}

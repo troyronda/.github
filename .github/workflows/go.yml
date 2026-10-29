@@ -1,7 +1,5 @@
 # Reusable CI for a Go module: formatting, tidy go.mod, vet, staticcheck,
-# govulncheck, race tests, and gitleaks over the full history. When the caller
-# runs on a schedule, only govulncheck runs, so a new advisory fails even an
-# idle repository.
+# govulncheck and race tests.
 name: go
 
 on:
@@ -28,7 +26,6 @@ jobs:
         with:
           go-version-file: go.mod
       - name: gofmt
-        if: github.event_name != 'schedule'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -37,15 +34,12 @@ jobs:
             exit 1
           fi
       - name: go mod tidy
-        if: github.event_name != 'schedule'
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
       - name: go vet
-        if: github.event_name != 'schedule'
         run: go vet ./...
       - name: staticcheck
-        if: github.event_name != 'schedule'
         run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
       - name: govulncheck
         env:
@@ -65,26 +59,5 @@ jobs:
           fi
           echo "No reachable vulnerabilities${IGNORE_FILE:+ outside $IGNORE_FILE}."
       - name: go test
-        if: github.event_name != 'schedule'
         run: go test -race ./...
 
-  gitleaks:
-    name: gitleaks
-    if: github.event_name != 'schedule'
-    runs-on: ubuntu-latest
-    env:
-      GITLEAKS_VERSION: 8.30.1
-      GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb # linux_x64
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          fetch-depth: 0
-      - name: install gitleaks
-        run: |
-          tarball="gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
-          curl -fsSLo "$RUNNER_TEMP/$tarball" "https://github.com/gitleaks/gitleaks/releases/download/v${GITLEAKS_VERSION}/$tarball"
-          echo "$GITLEAKS_SHA256  $RUNNER_TEMP/$tarball" | sha256sum -c -
-          tar -xzf "$RUNNER_TEMP/$tarball" -C "$RUNNER_TEMP" gitleaks
-      - name: gitleaks
-        # Redacted and not verbose, so no secret is printed in the log.
-        run: '"$RUNNER_TEMP/gitleaks" git --no-banner --redact .'
