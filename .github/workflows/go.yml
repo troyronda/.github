@@ -1,5 +1,7 @@
 # Reusable CI for a Go module: formatting, tidy go.mod, vet, staticcheck,
-# govulncheck, race tests, and gitleaks over the full history.
+# govulncheck, race tests, and gitleaks over the full history. When the caller
+# runs on a schedule, only govulncheck runs, so a new advisory fails even an
+# idle repository.
 name: go
 
 on:
@@ -26,6 +28,7 @@ jobs:
         with:
           go-version-file: go.mod
       - name: gofmt
+        if: github.event_name != 'schedule'
         run: |
           unformatted=$(gofmt -l .)
           if [ -n "$unformatted" ]; then
@@ -34,12 +37,15 @@ jobs:
             exit 1
           fi
       - name: go mod tidy
+        if: github.event_name != 'schedule'
         run: |
           go mod tidy
           git diff --exit-code -- go.mod go.sum
       - name: go vet
+        if: github.event_name != 'schedule'
         run: go vet ./...
       - name: staticcheck
+        if: github.event_name != 'schedule'
         run: go run honnef.co/go/tools/cmd/staticcheck@2026.2.2 ./...
       - name: govulncheck
         env:
@@ -59,10 +65,12 @@ jobs:
           fi
           echo "No reachable vulnerabilities${IGNORE_FILE:+ outside $IGNORE_FILE}."
       - name: go test
+        if: github.event_name != 'schedule'
         run: go test -race ./...
 
   gitleaks:
     name: gitleaks
+    if: github.event_name != 'schedule'
     runs-on: ubuntu-latest
     env:
       GITLEAKS_VERSION: 8.30.1
